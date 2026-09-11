@@ -1,0 +1,22 @@
+[build-system]
+requires = ["uv_build>=0.11.19,<0.12.0"]
+build-backend = "uv_build"
+
+[project]
+name = "micromailer"
+version = "0.1.0"
+description = "Ultra-fast, modular, zero-dependency async email engine for Python, FastAPI, and Django."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [
+    { name = "BazilSuhail", email = "bazil1854@gmail.com" }
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/BazilSuhail/micromailer"
+Repository = "https://github.com/BazilSuhail/micromailer"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/micromailer"]
