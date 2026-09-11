@@ -61,7 +61,6 @@ def test_smtp_mailer_init() -> None:
     assert m.password == "p"
     assert m.use_tls is True
     assert m.timeout == 10.0
-    assert m._connected is False
 
 
 def test_render_template() -> None:

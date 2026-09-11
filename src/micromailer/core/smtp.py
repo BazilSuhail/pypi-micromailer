@@ -1,11 +1,10 @@
 from __future__ import annotations
 import asyncio
-import ssl
-import base64
+import smtplib
 from email.message import EmailMessage
 from typing import Optional, List, Union
 
-from .base import MailerBackend, SMTPError
+from .base import SMTPError
 
 
 class AsyncSMTPMailer:
@@ -16,9 +15,6 @@ class AsyncSMTPMailer:
         "password",
         "use_tls",
         "timeout",
-        "_reader",
-        "_writer",
-        "_connected",
     )
 
     def __init__(
@@ -36,78 +32,40 @@ class AsyncSMTPMailer:
         self.password = password
         self.use_tls = use_tls
         self.timeout = timeout
-        self._reader: Optional[asyncio.StreamReader] = None
-        self._writer: Optional[asyncio.StreamWriter] = None
-        self._connected = False
 
-    async def _read_resp(self) -> int:
-        if self._reader is None:
-            raise SMTPError(-1, "Not connected")
-        while True:
-            raw = await asyncio.wait_for(self._reader.readline(), timeout=self.timeout)
-            resp = raw.decode(errors="replace").strip()
-            if not resp:
-                raise SMTPError(-1, "Empty SMTP response")
-            code = int(resp[:3]) if len(resp) >= 3 else -1
-            if code >= 400:
-                raise SMTPError(code, resp)
-            if len(resp) >= 4 and resp[3] == "-":
-                continue
-            return code
-
-    async def _cmd(self, command: str) -> int:
-        if self._writer is None:
-            raise SMTPError(-1, "Not connected")
-        self._writer.write(f"{command}\r\n".encode())
-        await self._writer.drain()
-        return await self._read_resp()
-
-    async def _connect(self) -> None:
-        if self._connected:
-            return
-
-        ssl_ctx = ssl.create_default_context()
-        loop = asyncio.get_running_loop()
+    def _send_sync(
+        self,
+        to: List[str],
+        subject: str,
+        html_body: str,
+        sender_email: str,
+    ) -> bool:
+        msg = EmailMessage()
+        msg["From"] = sender_email
+        msg["To"] = ", ".join(to)
+        msg["Subject"] = subject
+        msg.add_alternative(html_body, subtype="html")
 
         if self.use_tls and self.port == 465:
-            self._reader, self._writer = await asyncio.wait_for(
-                asyncio.open_connection(self.host, self.port, ssl=ssl_ctx),
-                timeout=self.timeout,
-            )
+            server = smtplib.SMTP_SSL(self.host, self.port, timeout=self.timeout)
         else:
-            self._reader, self._writer = await asyncio.wait_for(
-                asyncio.open_connection(self.host, self.port),
-                timeout=self.timeout,
-            )
-
-        await self._read_resp()
-        await self._cmd(f"EHLO {self.host}")
-
-        if self.use_tls and self.port not in (465,):
-            resp = await self._cmd("STARTTLS")
-            if resp == 220:
-                reader_proto = self._reader._protocol
-                new_reader = asyncio.StreamReader()
-                reader_proto._stream_reader = new_reader
-                new_transport = await loop.start_tls(
-                    self._writer.transport,
-                    reader_proto,
-                    sslcontext=ssl_ctx,
-                    server_hostname=self.host,
-                )
-                self._reader = new_reader
-                self._writer = asyncio.StreamWriter(
-                    new_transport, reader_proto, new_reader, loop
-                )
-                await self._cmd(f"EHLO {self.host}")
-
-        if self.username and self.password:
-            auth = base64.b64encode(
-                f"\0{self.username}\0{self.password}".encode()
-            ).decode()
-            await self._cmd(f"AUTH PLAIN {auth}")
-
-        self._connected = True
+            server = smtplib.SMTP(self.host, self.port, timeout=self.timeout)
+        try:
+            server.ehlo()
+            if self.use_tls and self.port not in (465,):
+                server.starttls()
+                server.ehlo()
+            if self.username and self.password:
+                server.login(self.username, self.password)
+            server.sendmail(sender_email, to, msg.as_string())
+        except smtplib.SMTPException:
+            return False
+        finally:
+            try:
+                server.quit()
+            except smtplib.SMTPException:
+                pass
+        return True
 
     async def send(
         self,
@@ -118,58 +76,22 @@ class AsyncSMTPMailer:
     ) -> bool:
         recipients = [to] if isinstance(to, str) else list(to)
         sender_email = sender or self.username
-
         if not sender_email:
             raise SMTPError(-1, "No sender specified")
 
-        await self._connect()
-
-        msg = EmailMessage()
-        msg["From"] = sender_email
-        msg["To"] = ", ".join(recipients)
-        msg["Subject"] = subject
-        msg.add_alternative(html_body, subtype="html")
-
-        await self._cmd(f"MAIL FROM:<{sender_email}>")
-        for rcpt in recipients:
-            await self._cmd(f"RCPT TO:<{rcpt}>")
-
-        await self._cmd("DATA")
-        self._writer.write(msg.as_bytes() + b"\r\n.\r\n")
-        await self._writer.drain()
-        code = await self._read_resp()
-
-        await self._cmd("RSET")
-        return 250 <= code <= 299
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, self._send_sync, recipients, subject, html_body, sender_email
+        )
 
     async def close(self) -> None:
-        if self._writer is not None:
-            try:
-                await self._cmd("QUIT")
-            except SMTPError:
-                pass
-            self._writer.close()
-            try:
-                await self._writer.wait_closed()
-            except asyncio.TimeoutError:
-                pass
-            self._writer = None
-            self._reader = None
-        self._connected = False
-
-    async def reset(self) -> None:
-        if self._writer and self._connected:
-            try:
-                await self._cmd("RSET")
-            except SMTPError:
-                pass
+        pass
 
     async def aclose(self) -> None:
-        await self.close()
+        pass
 
     async def __aenter__(self) -> AsyncSMTPMailer:
-        await self._connect()
         return self
 
     async def __aexit__(self, *args: object) -> None:
-        await self.close()
+        pass

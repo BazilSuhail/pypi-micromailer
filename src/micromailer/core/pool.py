@@ -40,10 +40,8 @@ class SMTPPool:
 
     async def release(self, mailer: AsyncSMTPMailer) -> None:
         if len(self._pool) < self._max_size:
-            await mailer.reset()
             self._pool.append(mailer)
-        else:
-            await mailer.aclose()
+        await mailer.aclose()
 
     async def close(self) -> None:
         for m in self._pool:
