@@ -20,3 +20,6 @@ Repository = "https://github.com/BazilSuhail/micromailer"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/micromailer"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
