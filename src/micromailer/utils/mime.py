@@ -37,7 +37,11 @@ def validate_html(html: str) -> list[str]:
                 if not tags:
                     errors.append(f"Unexpected closing tag </{tag_name[1:]}>")
                 else:
-                    tags.pop()
+                    expected = tags.pop()
+                    if expected != tag_name[1:]:
+                        errors.append(
+                            f"Unexpected closing tag </{tag_name[1:]}> (expected </{expected}>)"
+                        )
             elif tag_name not in (
                 "meta",
                 "link",
@@ -57,4 +61,6 @@ def validate_html(html: str) -> list[str]:
             i = j + 1
         else:
             i += 1
+    for tag in tags:
+        errors.append(f"Unclosed tag <{tag}>")
     return errors
