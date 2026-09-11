@@ -43,25 +43,23 @@ class AsyncSMTPMailer:
     async def _read_resp(self) -> int:
         if self._reader is None:
             raise SMTPError(-1, "Not connected")
-        raw = await self._reader.readline()
-        resp = raw.decode(errors="replace").strip()
-        code = int(resp[:3]) if len(resp) >= 3 else -1
-        if code >= 400:
-            raise SMTPError(code, resp)
-        return code
+        while True:
+            raw = await asyncio.wait_for(self._reader.readline(), timeout=self.timeout)
+            resp = raw.decode(errors="replace").strip()
+            if not resp:
+                raise SMTPError(-1, "Empty SMTP response")
+            code = int(resp[:3]) if len(resp) >= 3 else -1
+            if code >= 400:
+                raise SMTPError(code, resp)
+            if len(resp) >= 4 and resp[3] == "-":
+                continue
+            return code
 
     async def _cmd(self, command: str) -> int:
         if self._writer is None:
             raise SMTPError(-1, "Not connected")
         self._writer.write(f"{command}\r\n".encode())
         await self._writer.drain()
-        if command == "QUIT":
-            try:
-                raw = await asyncio.wait_for(self._reader.readline(), timeout=2.0)
-                code = int(raw[:3]) if len(raw) >= 3 else -1
-            except asyncio.TimeoutError:
-                code = -1
-            return code
         return await self._read_resp()
 
     async def _connect(self) -> None:
@@ -88,8 +86,8 @@ class AsyncSMTPMailer:
         if self.use_tls and self.port not in (465,):
             resp = await self._cmd("STARTTLS")
             if resp == 220:
-                new_reader = asyncio.StreamReader()
                 reader_proto = self._reader._protocol
+                new_reader = asyncio.StreamReader()
                 reader_proto._stream_reader = new_reader
                 new_transport = await loop.start_tls(
                     self._writer.transport,
@@ -139,10 +137,10 @@ class AsyncSMTPMailer:
         await self._cmd("DATA")
         self._writer.write(msg.as_bytes() + b"\r\n.\r\n")
         await self._writer.drain()
-        await self._read_resp()
+        code = await self._read_resp()
 
         await self._cmd("RSET")
-        return True
+        return 250 <= code <= 299
 
     async def close(self) -> None:
         if self._writer is not None:
